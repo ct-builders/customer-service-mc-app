@@ -1,0 +1,12 @@
+{
+  "extends": "@commercetools-frontend/application-config/tsconfig-mc-app.json",
+  "compilerOptions": {
+    "typeRoots": ["@types", "@types-extensions", "node_modules/@types"],
+    // Allow tsc to resolve dependencies of `@types` packages in the way pnpm sets up the `node_modules`.
+    "preserveSymlinks": false,
+    // The Application Kit ships declaration files that only resolve under its own
+    // workspace layout; skip type-checking third-party .d.ts (standard for MC apps).
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,7 @@
+i18n/data/*.json
+public
+.cache
+.yarn
+
+# Other Claude sessions' worktrees live here — never rewrite their files.
+.claude

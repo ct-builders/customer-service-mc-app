@@ -1,0 +1,20 @@
+# Netlify configuration for the "Customer Service" Merchant Center Custom Application.
+# A Custom Application is a static single-page app: build with mc-scripts, publish the
+# generated `public/` directory, and rewrite all routes to index.html for client-side routing.
+
+[build]
+  command = "npm run build"
+  publish = "public"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Build the production bundle (compiles index.html with env.production from
+  # custom-application-config.mjs).
+  MC_APP_ENV = "production"
+  NODE_ENV = "production"
+
+# Single-page app: serve index.html for any path the static files don't match.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
