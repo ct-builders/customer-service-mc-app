@@ -14,8 +14,7 @@ import { useCtp } from '../sdk/use-ctp';
 
 /**
  * commercetools has no native ticket entity, so CSR tickets are modeled as
- * Custom Objects. ("Ticket" is the term used across support tooling; this covers
- * Oracle ATG's "call tracking" concept.)
+ * Custom Objects.
  */
 export const TICKETS_CONTAINER = 'csr-tickets';
 

@@ -91,8 +91,9 @@ Environment variables) and trigger a redeploy.
 ---
 
 ## Notes
-- The app reads/writes Custom Objects in containers `csr-cases`, `csr-store-credit`, and
-  `csr-order-comments`. These are created on first write — no manual setup needed.
+- The app reads/writes Custom Objects in six containers: `csr-tickets`, `csr-counters`,
+  `csr-order-comments`, `csr-store-credit`, `csr-settings` and `csr-launch-tokens`. These are
+  created on first write — no manual setup needed.
 - Infinite reload after install ⇒ the registered entry point URI path doesn't match the
   `entryPointUriPath` baked into the bundle. They must be identical.
 - Registering the same app in a second project: repeat Method B step 2 onward inside that
