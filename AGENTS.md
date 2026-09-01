@@ -42,10 +42,13 @@ npm run lint       # eslint
 
 - UI is commercetools UIKit (`@commercetools-uikit/*`). Match the surrounding components rather
   than introducing another styling approach.
-- Any CSR **write** action calls `ensureTicket()` (`src/hooks/use-ensure-ticket.ts`) so the
-  interaction lands on a ticket timeline. Best-effort; never block the action on it.
-- commercetools has no case/store-credit entity — those are Custom Objects in the containers
-  `csr-cases`, `csr-store-credit`, `csr-order-comments`. They are created on first write.
+- A CSR **write** action should call `ensureTicket()` (`src/hooks/use-ensure-ticket.ts`) so the
+  interaction lands on a ticket timeline. Best-effort; never block the action on it. Wired in
+  today from the customer dashboard, the business dashboard, assisted order and lists — the
+  order and return screens do not call it yet.
+- commercetools has no ticket/store-credit entity — those are Custom Objects, six containers in
+  all: `csr-tickets`, `csr-counters`, `csr-order-comments`, `csr-store-credit`, `csr-settings`,
+  `csr-launch-tokens`. They are created on first write.
 - Adding a new OAuth scope to `custom-application-config.mjs` requires re-syncing the MC
   registration (see `REGISTRATION.md`), otherwise requests 403 at runtime.
 

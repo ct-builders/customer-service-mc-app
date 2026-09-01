@@ -1,8 +1,7 @@
 # customer-service-mc-app
 
 A **Merchant Center Custom Application** that gives customer-service agents (CSRs) a single
-workspace for customer, order, return, and case management — modeled on the
-[Oracle ATG Commerce Service Center](https://docs.oracle.com/cd/E41069_01/Service.11-0/ATGCommerceServiceCenterUserGuide/html/index.html).
+workspace for customer, order, return, and case management.
 
 It runs **inside** the Merchant Center and talks to commercetools through the Merchant Center
 API gateway, authenticating as the logged-in MC user (no commercetools client credentials are
@@ -21,17 +20,19 @@ screen (see [Configuration](#configuration)).
 
 | Module | What a CSR can do | commercetools backing |
 | --- | --- | --- |
-| **Customers** | Search, 360° profile, addresses, order history, store-credit balance, create customer, send password reset | Customers API; store credit via Custom Objects |
-| **Businesses** | Business-unit 360 for B2B accounts — associates, addresses, orders | Business Units API |
-| **Orders** | Search, line items & totals, change order/shipment/payment state, add CSR comments, cancel | Orders API; comments via Custom Objects |
+| **Customers** | Search, 360° profile (orders, recent spend, store-credit balance, open tickets, business units, recent orders), create a customer | Customers API; store credit as Custom Objects |
+| **Businesses** | Business-unit 360 for B2B accounts — associates, stores, orders, open tickets | Business Units API |
+| **Orders** | Search, line items & totals, change order/shipment/payment state (`Cancelled` is one of the four order states), add CSR comments | Orders API; comments as Custom Objects |
 | **Returns & Refunds** | List orders with returns, file returns, mark refunded | Order `addReturnInfo` / `setReturnPaymentState` |
-| **Place order for customer** | Open the storefront in an iframe, logged in **as** the customer, with CSR privileges (per-line price overrides) | Storefront `/api/auth/impersonate` (see [Buy on behalf of](#buy-on-behalf-of)) |
+| **Place order for customer** | Open the storefront — embedded or in a new tab — logged in **as** the customer, with CSR privileges (per-line price overrides). Cart building happens in the storefront, not here | Storefront `/api/auth/impersonate` (see [Buy on behalf of](#buy-on-behalf-of)) |
 | **Gift & Wish Lists** | View and create a customer's shopping lists | Shopping Lists API |
-| **Tickets** | Track service cases — call logs, priority, status, note timeline; auto-opened on any CSR write action | Custom Objects (`csr-cases`) |
+| **Tickets** | Track service cases — priority, status, assignee, note timeline; opened automatically when a CSR acts from the customer, business, wish-list or place-order screen | Custom Objects (`csr-tickets`) |
 
-> commercetools has no native ticket/case or store-credit entity, so those are modeled as
-> **Custom Objects** (`csr-cases`, `csr-store-credit`, `csr-order-comments`). This covers ATG's
-> "call tracking" concept while keeping the app self-contained.
+> commercetools has no native ticket, store-credit or order-comment entity, so the app models
+> what it needs as **Custom Objects** — six containers, and nothing else to create in the
+> project: `csr-tickets`, `csr-counters` (human-readable ticket numbers), `csr-order-comments`,
+> `csr-store-credit`, `csr-settings` (runtime configuration) and `csr-launch-tokens` (the
+> "shop as customer" handshake).
 
 ## Configuration
 
@@ -40,8 +41,10 @@ Platform wiring is read at **build** time by `custom-application-config.mjs`. Co
 variables on your host for a deployment.
 
 Storefront wiring is **runtime** configuration: set it on the in-app **Settings** screen, which
-stores it as a Custom Object so the app can be re-pointed without a rebuild. The build
-variables below act as the defaults.
+stores it as a Custom Object (`csr-settings`) so the app can be re-pointed without a rebuild.
+Settings holds the two storefront URLs, how the storefront is opened (`auto`, `embedded` or
+`new-tab`) and the launch-token lifetime (30–900 seconds, default 120). The build variables
+below are its defaults, and "Revert to build defaults" puts them back.
 
 | Variable | Required | What it does |
 | --- | --- | --- |
@@ -74,7 +77,8 @@ requirements, and a reference implementation are in
 The handshake is brokered through commercetools, with **no shared secret**:
 
 1. This app writes a single-use launch token as a Custom Object (`csr-launch-tokens`) holding
-   the customer id, business unit, agent identity, and a short expiry (default 120s).
+   the customer id, business unit, agent identity, and a short expiry (120 seconds by default,
+   30–900 from Settings). Tokens nobody redeemed are swept on the next launch.
 2. It opens `<storefront>/api/auth/impersonate?token=<token>` — an opaque token, nothing else.
 3. The storefront reads that Custom Object with its own commercetools credentials, rejects it if
    expired, **deletes it** (single use), then starts a session as that customer with `csrMode`
@@ -89,6 +93,12 @@ user with `manage_key_value_documents` minted it.
 
 The storefront's API client needs `view_key_value_documents` and `manage_key_value_documents` in
 addition to what it already has.
+
+**Embedding can fail for a second reason, outside this app's control.** Inside the Merchant
+Center's iframe the storefront's session cookie is third-party, and browsers increasingly refuse
+those — the handshake still succeeds, the token is still redeemed, and the frame comes up blank
+or bounced. That is what the launch-mode setting is for: `new-tab` always opens a tab, and
+`auto` embeds only when the origin is in the build-time allowlist above.
 
 ## Develop locally
 
@@ -105,6 +115,8 @@ access to the project in `INITIAL_PROJECT_KEY`.
 
 ```bash
 npm run typecheck    # tsc --noEmit
+npm run lint         # eslint .
+npm test             # jest — 51 tests across three suites
 npm run build        # mc-scripts build → public/  (this is the pre-deploy gate)
 ```
 
@@ -112,11 +124,17 @@ npm run build        # mc-scripts build → public/  (this is the pre-deploy gat
 
 - `src/sdk/use-ctp.ts` — low-level REST client over the MC API gateway (`useAsyncDispatch` + `actions`).
 - `src/sdk/use-async-data.ts` — generic loading/error/data hook with `refetch`.
+- `src/sdk/use-app-base.ts`, `use-current-user.ts`, `use-page-title.ts` — the app's base path, the
+  signed-in MC user, and the browser tab title.
+- `src/session/session-context.tsx` — the current customer, business unit and ticket, held across
+  screens and shown in the status bar.
 - `src/hooks/*` — per-domain data hooks (customers, businesses, orders, carts, products, shopping lists, tickets).
 - `src/components/*` — one folder per module, wired in `src/routes.tsx`.
 - `src/csr-launch.ts` — mints single-use "shop as customer" launch tokens and builds the URL.
 - `src/hooks/use-csr-settings.ts` — runtime storefront configuration (Custom Object) and the
   build-time CSP reality check behind the Settings screen.
+- `src/hooks/use-ensure-ticket.ts` — auto-ticketing: opens a ticket for the current customer or
+  business if none is current, and appends the activity to its timeline.
 - `custom-application-config.mjs` — entry point, region, OAuth scopes, menu links, CSP, `additionalEnv`.
 
 ## Deploy
