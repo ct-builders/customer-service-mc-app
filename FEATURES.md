@@ -3,7 +3,7 @@
 Comprehensive inventory of implemented features in this repository. Source of truth
 for what exists in the codebase — keep it updated when features change.
 
-_Last generated: 2026-09-02 by feature-doc._
+_Last generated: 2026-09-14 by feature-doc._
 
 `customer-service-mc-app` is a **Merchant Center Custom Application** (React SPA built with
 `@commercetools-frontend/mc-scripts`/appkit) that gives customer-service agents (CSRs) a single
@@ -11,9 +11,10 @@ workspace for customer, order, return, and case management — modeled on Oracle
 Service Center. It runs **inside** the Merchant Center and calls commercetools only through the
 MC API gateway, authenticated as the logged-in MC user — the app never embeds commercetools
 client credentials. It is **project-agnostic**: everything project-specific (project key, app URL,
-entry point, storefront URLs, the CSR impersonation key) is supplied via build environment
+entry point, and the default storefront URLs/CSP allowlist) is supplied via build environment
 variables read in `custom-application-config.mjs`, so one codebase serves any commercetools
-project.
+project. The storefront URLs, launch mode and launch-token lifetime can all be re-pointed at
+runtime from the in-app Settings screen with no rebuild — see "Place order for customer" below.
 
 ## Architecture & data access
 
@@ -40,9 +41,10 @@ project.
   `cloudIdentifier: 'gcp-us'`, dev/prod env, OAuth scopes (view: customers/orders/products/
   published-products/cart-discounts/discount-codes/shopping-lists/stores/business-units/
   key-value-documents/states; manage: customers/orders/shopping-lists/key-value-documents), a CSP
-  with `frame-src` computed from the configured storefront origins, `additionalEnv` (storefront
-  URLs + impersonation key exposed to the client at runtime), single main-menu link with no
-  submenu (the dashboard is the hub).
+  `frame-src` computed from `STOREFRONT_B2C_URL`/`STOREFRONT_B2B_URL`/`CSR_EXTRA_FRAME_SRC`,
+  `additionalEnv` (the two storefront URLs and the compiled `frameSrcOrigins` list, exposed to the
+  client at runtime via `useApplicationContext` as the Settings screen's build-time defaults),
+  single main-menu link with no submenu (the dashboard is the hub).
 - Routing (`src/routes.tsx`): one `SessionProvider`-scoped `Switch` over
   `/customers`, `/businesses`, `/orders`, `/returns`, `/cart` & `/assisted-order` (aliases),
   `/lists`, `/tickets`, and a full-bleed `/shop` route that skips the status bar/tabs/gutters;
@@ -149,30 +151,55 @@ project.
 ## Place order for customer ("buy on behalf of")
 
 - `src/components/assisted-order/assisted-order.tsx` (routed at both `/cart` and
-  `/assisted-order`) and `src/components/shop/shop-page.tsx` (the full-bleed `/shop` route) —
-  the CSR picks (or already has current) a customer, then opens the real storefront **embedded
-  in an iframe, logged in as that customer**, so the order placed is exactly the order the
-  shopper would have gotten (same PDP, promotions, tax, checkout) rather than a
-  reimplementation. All cart-building happens inside the storefront; this app does not build
-  carts itself.
-- `src/csr-launch.ts` — the handshake contract with the storefront:
-  - `GET <storefront>/api/auth/impersonate?customerId=…&key=…&agentEmail=…&agentName=…&parentOrigin=…&businessUnitKey=…&to=…` starts an impersonated session; `?exit=1` (no key) ends it.
-  - B2C vs B2B customers are routed to `STOREFRONT_B2C_URL` vs `STOREFRONT_B2B_URL` (B2C defaults
-    to the B2B URL when unset).
-  - The storefront posts `{ type: 'csr:order-placed', orderId, orderNumber, customerEmail,
-    totalCentAmount, currencyCode }` back to `parentOrigin` on checkout; `shop-page.tsx` verifies
-    **both** the message origin (against the configured storefront) and its shape before trusting
-    it, then shows a success banner, "Open order" deep link into the order-detail screen, and
-    writes the order onto the active ticket exactly once (deduped by order id).
-  - Leaving the page navigates the iframe to the exit URL and waits for its `onLoad` before
-    popping history, so the storefront's session/cookies don't outlive the visit (defense in
-    depth — a fresh impersonation always replaces the prior session and drops its bag regardless).
-  - An "Open in new tab ↗" escape hatch is offered for browsers (Safari, strict third-party
-    cookie blocking) that won't keep the partitioned session cookie alive in a cross-site iframe.
-  - With no storefront configured (`STOREFRONT_B2B_URL`/`STOREFRONT_B2C_URL` unset), every other
-    module still works — this page explains that no storefront is wired up instead of failing.
-- Any assisted-order launch calls `ensureTicket()` first (see Tickets below), so the interaction
-  is always captured on a ticket.
+  `/assisted-order`) — the CSR picks (or already has current) a customer, sees whether they
+  resolve to a B2B business unit, calls `ensureTicket()` (see Tickets below) so the interaction
+  is always captured, then pushes to the full-bleed `/shop` route with the target passed as query
+  params (`customerId`, `label`, `b2b`, `bu`).
+- `src/components/shop/shop-page.tsx` — the storefront rendered **logged in as that customer**,
+  so the order placed is exactly the order the shopper would have gotten (same PDP, promotions,
+  tax, checkout) rather than a reimplementation. All cart-building happens inside the storefront;
+  this app does not build carts itself. Mints its own launch token once settings have loaded
+  (deduped per target via `launchSignature`, so revisiting the same target does not mint twice),
+  shows an embedded iframe when embedding is allowed, surfaces a "storefront not appearing? open
+  in a new tab" fallback banner ~6s after the frame is handed a URL, and explains + offers Settings
+  when no storefront is configured for that customer's B2C/B2B segment.
+- `src/csr-launch.ts` / `src/hooks/use-csr-settings.ts` — the token-based handshake, with **no
+  shared secret**:
+  - `mintLaunchUrl` POSTs a single-use Custom Object (container `csr-launch-tokens`, an opaque
+    43-char base64url key) holding `customerId`, optional `businessUnitKey`/`agentEmail`/
+    `agentName`, `issuedAt`, and `expiresAt` (now + the configured token TTL), then returns
+    `GET <storefront>/api/auth/impersonate?token=<token>`; `?exit=1` ends impersonation.
+  - Every call mints a *fresh* token (the embedded iframe and each "Open in new tab" click each
+    get their own), and `sweepExpired()` opportunistically deletes stale unredeemed tokens on
+    every mint.
+  - The storefront is trusted to read the token with its own commercetools credentials, check
+    the expiry, delete it (single use), then start the session — see
+    `docs/CSR-STOREFRONT-INTEGRATION.md` for the full contract and reference Next.js route. The
+    trust argument is that the token could only be minted through the MC API gateway by a
+    signed-in MC user holding `manage_key_value_documents`.
+  - B2C vs B2B customers resolve to `STOREFRONT_B2C_URL`/`STOREFRONT_B2B_URL` (B2C falls back to
+    the B2B URL when unset) via the same runtime settings the Settings screen writes.
+  - Whether a launch embeds is `shouldEmbed()`: `new-tab` mode never embeds, `embedded` mode
+    always does when a storefront is configured, and `auto` (the default) embeds only when the
+    target origin is inside the build-time CSP `frame-src` allowlist (`canEmbed`) — an origin
+    added later from Settings but never rebuilt into `CSR_EXTRA_FRAME_SRC` opens in a new tab
+    instead of rendering a blank iframe.
+  - With no storefront configured for that segment, every other module still works — the shop
+    page explains that none is wired up and links to Settings.
+
+## Settings
+
+- `src/components/settings/settings.tsx` / `src/hooks/use-csr-settings.ts` — runtime
+  configuration for "shop as customer", stored as a `csr-settings` Custom Object so a deployment
+  can be re-pointed without a rebuild: the B2C and B2B storefront origins (validated as bare
+  http(s) origins, no path), the launch mode (`auto`/`embedded`/`new-tab`), and the launch-token
+  lifetime (30–900s, default 120, `NumberInput`).
+- Per-storefront **"Can be embedded" / "New tab only" badges** (`canEmbed`) tell the operator, at
+  save time, whether a chosen origin is actually inside the compiled CSP `frame-src` allowlist —
+  catching a misconfiguration here instead of a blank iframe later.
+- A read-only panel shows the build-time defaults (`STOREFRONT_B2C_URL`, `STOREFRONT_B2B_URL`,
+  the compiled CSP `frame-src` list) that apply whenever nothing has been saved. "Save settings"
+  writes the Custom Object; "Revert to build defaults" deletes it.
 
 ## Gift & Wish Lists module
 
@@ -249,7 +276,10 @@ itself:
   gate).
 - Config knobs (all build-time, via `custom-application-config.mjs` / `.env`): `INITIAL_PROJECT_KEY`,
   `APPLICATION_URL`, `CUSTOM_APPLICATION_ID`, `ENTRY_POINT_URI_PATH`, `STOREFRONT_B2B_URL`,
-  `STOREFRONT_B2C_URL`, plus the shared secret the impersonation hand-off is signed with (named in `docs/CSR-STOREFRONT-INTEGRATION.md`, not here).
+  `STOREFRONT_B2C_URL`, `CSR_EXTRA_FRAME_SRC` — all of which are only *defaults*; the storefront
+  URLs, launch mode and token TTL are overridable at runtime from Settings (see above). There is
+  no shared secret anywhere in this design — the hand-off is a single-use commercetools Custom
+  Object token (`docs/CSR-STOREFRONT-INTEGRATION.md`).
 
 ## Licence, support and the storefront contract (this copy only)
 
@@ -261,7 +291,7 @@ material with no SLA and no behavioural guarantee.
   Center side of "place order for customer" is finished here; the storefront side is not, and
   the document is the contract for it. It leads with the security requirements, because the
   endpoint it describes creates an authenticated customer session and getting it wrong is an
-  authentication bypass.
-- **CSR settings are configurable in-app** — `src/components/settings/settings.tsx` with
-  `src/hooks/use-csr-settings.ts`, so the storefront URL and hand-off behaviour are set by the
-  operator rather than at build time.
+  authentication bypass. It also documents the reference Next.js redemption route, why the
+  redirect must be relative (an absolute one built from `origin` inside the MC iframe can resolve
+  to the platform's internal host), and the six things worth writing down as automated tests
+  (replay, expiry, forgery among them).
